@@ -9,7 +9,8 @@
 #include <iomanip>
 #include <chrono>
 #include <concepts>
-#include "memory.hpp"
+#include <tuple>
+#include "axon/memory/memory.hpp"
 
 #if defined(_WIN32) || defined(_WIN64)
     #define WIN32_LEAN_AND_MEAN
@@ -62,5 +63,63 @@ namespace axon {
     };
 
     using SecureString = std::basic_string<char, std::char_traits<char>, AlignedAllocator<char, 64>>;
+
+    template <int Alignment = 64, bool Secure = true, typename... Types>
+    struct ArrayContainer {
+        std::tuple<std::vector<Types, axon::AlignedAllocator<Types, Alignment, Secure>>...> data;
+
+        ArrayContainer(size_t initial_capacity) {
+            std::apply([initial_capacity](auto&... vecs) {
+                (vecs.reserve(initial_capacity), ...);
+            }, data);
+        }
+
+        template <typename... Us>
+        void add_entry(Us&&... args) {
+            static_assert(sizeof...(Us) == sizeof...(Types), "Wrong number of arguments for SoA entry.");
+            add_entry_impl(std::make_index_sequence<sizeof...(Types)>{}, std::forward<Us>(args)...);
+        }
+
+        void add_entry(std::tuple<Types...> entry) {
+            std::apply([this](auto&&... args) {
+                this->add_entry(std::forward<decltype(args)>(args)...);
+            }, entry);
+        }
+
+        template <size_t Index>
+        auto& get_array() {
+            return std::get<Index>(data);
+        }
+
+        void remove_entry(size_t index) {
+            remove_impl(std::make_index_sequence<sizeof...(Types)>{}, index, false);
+        }
+
+        void swap_pop_entry(size_t index) {
+            remove_impl(std::make_index_sequence<sizeof...(Types)>{}, index, true);
+        }
+
+    private:
+        template <size_t... Is, typename... Us>
+        void add_entry_impl(std::index_sequence<Is...>, Us&&... args) {
+            (std::get<Is>(data).emplace_back(std::forward<Us>(args)), ...);
+        }
+
+        template <size_t... Is>
+        void remove_impl(std::index_sequence<Is...>, size_t index, bool fast) {
+            if (fast) {
+                ([&] {
+                    auto& vec = std::get<Is>(data);
+                    if (index < vec.size() - 1) {
+                        vec[index] = std::move(vec.back());
+                    }
+                    vec.pop_back();
+                }(), ...);
+            } else {
+                (std::get<Is>(data).erase(std::get<Is>(data).begin() + index), ...);
+            }
+        }
+
+    };
 
 } // namespace axon
